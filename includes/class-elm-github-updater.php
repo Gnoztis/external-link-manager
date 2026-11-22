@@ -106,7 +106,7 @@ final class ELM_GitHub_Updater {
      * version in the header of the file on disk: inside the request that
      * replaces the files, core rewrites this transient while the constant
      * still holds the version loaded at the start of the request. Comparing
-     * only with the constant would re-inject "2.4.0 -> 2.4.0" right after a
+     * only with the constant would re-inject the same version right after a
      * successful update, and the phantom entry would live for hours.
      *
      * @param mixed $transient Update transient.
