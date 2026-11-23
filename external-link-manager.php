@@ -2,14 +2,14 @@
 /**
  * Plugin Name: External Link Manager
  * Description: Добавляет rel="nofollow" и target="_blank" для внешних ссылок. Есть возможность указать домены-исключения.
- * Version:     2.4.6
+ * Version:     2.4.7
  * Author:      Gnostis
  * Author URI:  https://github.com/Gnoztis
  * License:     GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Update URI:  https://github.com/Gnoztis/external-link-manager
  * Text Domain: external-link-manager
- * Requires at least: 6.4
+ * Requires at least: 7.0
  * Requires PHP: 8.0
  * Tested up to: 7.1
  *
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'ELM_VERSION', '2.4.6' );
+define( 'ELM_VERSION', '2.4.7' );
 define( 'ELM_PLUGIN_FILE', __FILE__ );
 define( 'ELM_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ELM_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
