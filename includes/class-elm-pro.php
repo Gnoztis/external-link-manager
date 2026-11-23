@@ -26,7 +26,7 @@ final class ELM_Pro {
     /** Transient holding the cached PRO user list. */
     private const CACHE_KEY = 'elm_pro_users';
 
-    /** The list is cached for five minutes; the tab has a refresh button. */
+    /** The list is cached for five minutes and recalculated when the tab opens stale. */
     private const CACHE_TTL = 300;
 
     /** Users shown per page. */
@@ -64,6 +64,20 @@ final class ELM_Pro {
     private static array $source_cache = [];
 
     /**
+     * Which Membership piece was missing: class, method, function, container, object.
+     *
+     * @var string
+     */
+    private static string $missing_reason = '';
+
+    /**
+     * Exception message from the theme container, if it threw.
+     *
+     * @var string
+     */
+    private static string $error_text = '';
+
+    /**
      * Membership service from the theme container, if available.
      *
      * @var object|null
@@ -87,13 +101,6 @@ final class ELM_Pro {
     private static string $membership_source = 'missing';
 
     /**
-     * Registers the admin hooks.
-     */
-    public static function register_hooks(): void {
-        add_action( 'admin_init', [ self::class, 'handle_refresh' ] );
-    }
-
-    /**
      * Forgets the per-request caches.
      *
      * Used by tests and after a subscription change within the same request.
@@ -106,6 +113,8 @@ final class ELM_Pro {
         self::$membership       = null;
         self::$membership_loaded = false;
         self::$membership_source = 'missing';
+        self::$missing_reason    = '';
+        self::$error_text        = '';
     }
 
     /**
@@ -125,6 +134,11 @@ final class ELM_Pro {
     /**
      * The Membership service, or null when the theme API is unavailable.
      *
+     * The theme function lives in the WPShop\WPCommunity namespace:
+     * `\WPShop\WPCommunity\theme_container()`. Calling the unqualified
+     * `theme_container()` from the plugin's global namespace always fails,
+     * which is why the class was reported as missing before 2.5.1.
+     *
      * Any container problem is treated as "no API": the caller then falls back
      * to "not PRO" and nofollow stays in place.
      *
@@ -138,6 +152,8 @@ final class ELM_Pro {
         self::$membership_loaded = true;
         self::$membership        = null;
         self::$membership_source = 'missing';
+        self::$missing_reason    = '';
+        self::$error_text        = '';
 
         if ( ! self::is_theme_active() ) {
             return null;
@@ -145,16 +161,30 @@ final class ELM_Pro {
 
         $class = '\WPShop\WPCommunity\Membership';
 
-        if ( ! class_exists( $class ) || ! method_exists( $class, 'is_member' ) ) {
+        if ( ! class_exists( $class ) ) {
+            self::$missing_reason = 'class';
             return null;
         }
-        if ( ! function_exists( 'theme_container' ) ) {
+        if ( ! method_exists( $class, 'is_member' ) ) {
+            self::$missing_reason = 'method';
+            return null;
+        }
+
+        $container_function = '\WPShop\WPCommunity\theme_container';
+        if ( ! function_exists( $container_function ) && function_exists( 'theme_container' ) ) {
+            // Older theme snapshots exposed the function globally; keep it as
+            // a fallback without relying on it.
+            $container_function = 'theme_container';
+        }
+        if ( ! function_exists( $container_function ) ) {
+            self::$missing_reason = 'function';
             return null;
         }
 
         try {
-            $container = theme_container();
+            $container = $container_function();
             if ( ! is_object( $container ) || ! method_exists( $container, 'get' ) ) {
+                self::$missing_reason = 'container';
                 return null;
             }
 
@@ -162,13 +192,58 @@ final class ELM_Pro {
             if ( is_object( $membership ) && $membership instanceof $class ) {
                 self::$membership        = $membership;
                 self::$membership_source = 'membership';
+            } else {
+                self::$missing_reason = 'object';
             }
         } catch ( \Throwable $error ) {
             self::$membership        = null;
             self::$membership_source = 'error';
+            self::$error_text        = $error->getMessage();
         }
 
         return self::$membership;
+    }
+
+    /**
+     * Diagnostics: where the last Membership answer came from.
+     *
+     * @return string membership, missing, error, filter, or an empty string.
+     */
+    public static function source(): string {
+        return self::$membership_source;
+    }
+
+    /**
+     * Specific explanation for a missing or broken theme API.
+     *
+     * Deliberately names the missing piece instead of claiming the theme does
+     * not provide Membership::is_member(); the theme 1.6.0 does provide it.
+     */
+    public static function diagnostic_message(): string {
+        if ( 'error' === self::$membership_source ) {
+            $text = '' !== self::$error_text ? self::$error_text : __( 'без текста', 'external-link-manager' );
+
+            return sprintf(
+                /* translators: %s: exception message from the theme container. */
+                __( 'Тема WPCommunity вернула ошибку при обращении к Membership: %s', 'external-link-manager' ),
+                $text
+            );
+        }
+
+        switch ( self::$missing_reason ) {
+            case 'class':
+                return __( 'Класс WPShop\\WPCommunity\\Membership не найден. Проверьте, что активна тема WPCommunity 1.6.0+ и её автозагрузчик доступен в админке.', 'external-link-manager' );
+            case 'method':
+                return __( 'В классе Membership нет метода is_member(). Версия темы несовместима с плагином.', 'external-link-manager' );
+            case 'function':
+                return __( 'Функция WPShop\\WPCommunity\\theme_container() не найдена. Тема загружена не полностью или это не WPCommunity.', 'external-link-manager' );
+            case 'container':
+                return __( 'Контейнер темы WPCommunity недоступен: theme_container() не вернул объект с методом get().', 'external-link-manager' );
+            case 'object':
+                return __( 'Контейнер темы вернул не Membership, а другой объект. Проверьте версию темы WPCommunity.', 'external-link-manager' );
+            default:
+                return __( 'Не удалось определить причину: тема WPCommunity активна, но Membership недоступен.', 'external-link-manager' );
+        }
     }
 
     /**
@@ -205,8 +280,10 @@ final class ELM_Pro {
                 $is     = (bool) $membership->is_member( $user_id );
                 $source = 'membership';
             } catch ( \Throwable $error ) {
-                $is     = false;
-                $source = 'error';
+                $is                       = false;
+                $source                   = 'error';
+                self::$membership_source  = 'error';
+                self::$error_text         = $error->getMessage();
             }
         }
 
@@ -234,10 +311,17 @@ final class ELM_Pro {
     /**
      * Diagnostics: where the cached answer for a user came from.
      *
-     * @param int $user_id User ID.
+     * With no user ID it returns the last Membership source used by the tab
+     * (membership, missing or error).
+     *
+     * @param int $user_id Optional user ID.
      * @return string membership, missing, error, filter, or an empty string.
      */
-    public static function last_source( int $user_id ): string {
+    public static function last_source( int $user_id = 0 ): string {
+        if ( $user_id <= 0 ) {
+            return self::$membership_source;
+        }
+
         return self::$source_cache[ $user_id ] ?? '';
     }
 
@@ -260,6 +344,9 @@ final class ELM_Pro {
             $format = (string) get_option( 'date_format', 'd.m.Y' );
             return (string) $membership->get_expired_date( $user_id, '' !== $format ? $format : 'd.m.Y' );
         } catch ( \Throwable $error ) {
+            self::$membership_source = 'error';
+            self::$error_text        = $error->getMessage();
+
             return '';
         }
     }
@@ -324,17 +411,26 @@ final class ELM_Pro {
     public static function get_pro_users(): array {
         $cached = get_transient( self::CACHE_KEY );
         if ( is_array( $cached ) && isset( $cached['users'] ) ) {
-            return $cached;
+            // The transient normally expires after CACHE_TTL; the timestamp
+            // also covers a stale value left by an older plugin version.
+            if ( (int) ( $cached['at'] ?? 0 ) + self::CACHE_TTL > time() ) {
+                return $cached;
+            }
         }
 
         $result = [
-            'users'     => [],
-            'truncated' => false,
-            'total'     => 0,
-            'api'       => false,
+            'users'      => [],
+            'truncated'  => false,
+            'total'      => 0,
+            'api'        => false,
+            'at'         => time(),
+            'error_text' => '',
+            'source'     => self::$membership_source,
         ];
 
         if ( ! self::is_theme_active() || null === self::membership() ) {
+            $result['source'] = self::$membership_source;
+
             return $result;
         }
 
@@ -381,6 +477,8 @@ final class ELM_Pro {
         );
 
         $result['total'] = count( $result['users'] );
+        $result['error_text'] = self::$error_text;
+        $result['source']     = self::$membership_source;
 
         set_transient( self::CACHE_KEY, $result, self::CACHE_TTL );
 
@@ -392,32 +490,6 @@ final class ELM_Pro {
      */
     public static function flush_cache(): void {
         delete_transient( self::CACHE_KEY );
-    }
-
-    /**
-     * Handles the "Обновить" button on the PRO tab.
-     */
-    public static function handle_refresh(): void {
-        if ( ! isset( $_GET['elm_pro_refresh'] ) ) {
-            return;
-        }
-        if ( ! self::can_view_tab() ) {
-            return;
-        }
-
-        check_admin_referer( 'elm_pro_refresh' );
-        self::flush_cache();
-
-        wp_safe_redirect(
-            add_query_arg(
-                [
-                    'page' => 'external-link-manager',
-                    'tab'  => 'pro',
-                ],
-                admin_url( 'options-general.php' )
-            )
-        );
-        exit;
     }
 
     /**
@@ -448,28 +520,26 @@ final class ELM_Pro {
             $post_counts[ $row['id'] ] = (int) count_user_posts( $row['id'], 'post', true );
         }
 
-        $refresh_url = wp_nonce_url(
-            add_query_arg(
-                [
-                    'page'             => 'external-link-manager',
-                    'tab'              => 'pro',
-                    'elm_pro_refresh'  => '1',
-                ],
-                admin_url( 'options-general.php' )
-            ),
-            'elm_pro_refresh'
-        );
+        $source     = (string) ( $data['source'] ?? self::last_source() );
+        $diagnostic = '';
+        if ( ! $data['api'] ) {
+            $diagnostic = self::diagnostic_message();
+        } elseif ( '' !== ( $data['error_text'] ?? '' ) ) {
+            $diagnostic = sprintf(
+                /* translators: %s: exception message from the theme container. */
+                __( 'Тема WPCommunity вернула ошибку при обращении к Membership: %s', 'external-link-manager' ),
+                (string) $data['error_text']
+            );
+        }
         ?>
-        <h2><?php esc_html_e( 'PRO-пользователи', 'external-link-manager' ); ?></h2>
         <p><?php esc_html_e( 'Пользователи с активной подпиской PRO. Ссылки в их статьях не получают rel="nofollow".', 'external-link-manager' ); ?></p>
-        <p>
-            <a class="button" href="<?php echo esc_url( $refresh_url ); ?>">
-                <?php esc_html_e( 'Обновить', 'external-link-manager' ); ?>
-            </a>
-        </p>
 
         <?php if ( ! $data['api'] ) : ?>
-            <p><?php esc_html_e( 'Список недоступен: тема не предоставила Membership::is_member().', 'external-link-manager' ); ?></p>
+            <p><?php echo esc_html( $diagnostic ); ?></p>
+            <p class="description">
+                <?php esc_html_e( 'Источник данных:', 'external-link-manager' ); ?>
+                <code><?php echo esc_html( $source ); ?></code>
+            </p>
             <?php return; ?>
         <?php endif; ?>
 
@@ -479,6 +549,13 @@ final class ELM_Pro {
 
         <?php if ( [] === $rows ) : ?>
             <p><?php esc_html_e( 'Активных PRO-пользователей нет.', 'external-link-manager' ); ?></p>
+            <?php if ( '' !== $diagnostic ) : ?>
+                <p><?php echo esc_html( $diagnostic ); ?></p>
+            <?php endif; ?>
+            <p class="description">
+                <?php esc_html_e( 'Источник данных:', 'external-link-manager' ); ?>
+                <code><?php echo esc_html( $source ); ?></code>
+            </p>
             <?php return; ?>
         <?php endif; ?>
 
@@ -534,6 +611,15 @@ final class ELM_Pro {
                 <?php endif; ?>
             </p>
         <?php endif; ?>
+
+        <?php if ( '' !== $diagnostic ) : ?>
+            <p><?php echo esc_html( $diagnostic ); ?></p>
+        <?php endif; ?>
+
+        <p class="description">
+            <?php esc_html_e( 'Источник данных:', 'external-link-manager' ); ?>
+            <code><?php echo esc_html( $source ); ?></code>
+        </p>
         <?php
     }
 }

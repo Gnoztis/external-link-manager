@@ -2,7 +2,7 @@
 /**
  * Plugin Name: External Link Manager
  * Description: Добавляет rel="nofollow" и target="_blank" для внешних ссылок. Есть возможность указать домены-исключения.
- * Version:     2.5.0
+ * Version:     2.5.1
  * Author:      Gnostis
  * Author URI:  https://github.com/Gnoztis
  * License:     GPL-2.0-or-later
@@ -22,7 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'ELM_VERSION', '2.5.0' );
+define( 'ELM_VERSION', '2.5.1' );
 define( 'ELM_PLUGIN_FILE', __FILE__ );
 define( 'ELM_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ELM_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -35,7 +35,6 @@ require_once ELM_PLUGIN_DIR . 'includes/class-elm-pro.php';
 require_once ELM_PLUGIN_DIR . 'includes/class-elm-github-updater.php';
 
 ( new ELM_GitHub_Updater() )->register_hooks();
-ELM_Pro::register_hooks();
 
 /* -------------------------------------------------------------------------
  * Settings link in the plugin list.
@@ -249,7 +248,6 @@ function elm_render_settings_page(): void {
 
             <!-- Excluded domains tab -->
             <div class="elm-tab-pane"<?php if ( 'excluded' !== $active_tab ) : ?> style="display:none;"<?php endif; ?>>
-                <h2><?php esc_html_e( 'Исключённые домены', 'external-link-manager' ); ?></h2>
                 <p><?php esc_html_e( 'Ссылки на указанные домены и их поддомены не будут изменяться. Начало «www.» игнорируется: example.com покрывает www.example.com и sub.example.com.', 'external-link-manager' ); ?></p>
 
                 <div id="elm-domains-list"></div>
