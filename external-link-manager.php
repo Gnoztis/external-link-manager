@@ -2,7 +2,7 @@
 /**
  * Plugin Name: External Link Manager
  * Description: Добавляет rel="nofollow" и target="_blank" для внешних ссылок. Есть возможность указать домены-исключения.
- * Version:     2.4.7
+ * Version:     2.5.0
  * Author:      Gnostis
  * Author URI:  https://github.com/Gnoztis
  * License:     GPL-2.0-or-later
@@ -22,18 +22,20 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'ELM_VERSION', '2.4.7' );
+define( 'ELM_VERSION', '2.5.0' );
 define( 'ELM_PLUGIN_FILE', __FILE__ );
 define( 'ELM_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ELM_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'ELM_BASENAME', plugin_basename( __FILE__ ) );
 define( 'ELM_REQUIRES_PHP', '8.0' );
-define( 'ELM_REQUIRES_WP', '6.4' );
+define( 'ELM_REQUIRES_WP', '7.0' );
 
 require_once ELM_PLUGIN_DIR . 'includes/class-elm-external-link-manager.php';
+require_once ELM_PLUGIN_DIR . 'includes/class-elm-pro.php';
 require_once ELM_PLUGIN_DIR . 'includes/class-elm-github-updater.php';
 
 ( new ELM_GitHub_Updater() )->register_hooks();
+ELM_Pro::register_hooks();
 
 /* -------------------------------------------------------------------------
  * Settings link in the plugin list.
@@ -180,11 +182,14 @@ function elm_render_settings_page(): void {
         return;
     }
 
+    $pro_tab    = class_exists( 'ELM_Pro' ) && ELM_Pro::can_view_tab();
     $active_tab = 'general';
     if ( isset( $_GET['tab'] ) ) {
         $requested_tab = sanitize_key( wp_unslash( (string) $_GET['tab'] ) );
         if ( 'excluded' === $requested_tab ) {
             $active_tab = 'excluded';
+        } elseif ( 'pro' === $requested_tab && $pro_tab ) {
+            $active_tab = 'pro';
         }
     }
 
@@ -205,6 +210,12 @@ function elm_render_settings_page(): void {
                class="nav-tab <?php echo esc_attr( 'excluded' === $active_tab ? 'nav-tab-active' : '' ); ?>">
                 <?php esc_html_e( 'Исключённые домены', 'external-link-manager' ); ?>
             </a>
+            <?php if ( $pro_tab ) : ?>
+                <a href="<?php echo esc_url( admin_url( 'options-general.php?page=external-link-manager&tab=pro' ) ); ?>"
+                   class="nav-tab <?php echo esc_attr( 'pro' === $active_tab ? 'nav-tab-active' : '' ); ?>">
+                    <?php esc_html_e( 'PRO-пользователи', 'external-link-manager' ); ?>
+                </a>
+            <?php endif; ?>
         </h2>
 
         <form action="options.php" method="post">
@@ -253,8 +264,20 @@ function elm_render_settings_page(): void {
                 <input type="hidden" name="elm_excluded_domains[]" value="" />
             </div>
 
-            <?php submit_button(); ?>
+            <?php if ( 'pro' !== $active_tab ) : ?>
+                <?php submit_button(); ?>
+            <?php endif; ?>
         </form>
+
+        <?php if ( $pro_tab ) : ?>
+            <div class="elm-tab-pane"<?php if ( 'pro' !== $active_tab ) : ?> style="display:none;"<?php endif; ?>>
+                <?php
+                if ( 'pro' === $active_tab ) {
+                    ELM_Pro::render_tab();
+                }
+                ?>
+            </div>
+        <?php endif; ?>
     </div>
 
     <script>

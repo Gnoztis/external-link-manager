@@ -35,6 +35,9 @@ if ( ! function_exists( 'elm_uninstall_site_data' ) ) {
         // Update-check cache created by includes/class-elm-github-updater.php.
         delete_transient( 'elm_github_release' );
         delete_transient( 'elm_github_release_error' );
+
+        // PRO tab cache created by includes/class-elm-pro.php.
+        delete_transient( 'elm_pro_users' );
     }
 }
 

@@ -98,6 +98,11 @@ final class ELM_External_Link_Manager {
         $open_new_tab = (bool) get_option( $this->target_blank_option, 1 );
         $add_nofollow = (bool) get_option( $this->nofollow_option, 1 );
 
+        // A PRO author's posts keep target/noopener (security) but not
+        // nofollow (SEO). The check is per post author and runs at render
+        // time, so an expired subscription restores nofollow by itself.
+        $suppress_nofollow = class_exists( 'ELM_Pro' ) && ELM_Pro::should_suppress_nofollow();
+
         $processor = new WP_HTML_Tag_Processor( $content );
 
         while ( $processor->next_tag( 'a' ) ) {
@@ -128,7 +133,7 @@ final class ELM_External_Link_Manager {
 
             $rel_tokens = [];
 
-            if ( $add_nofollow ) {
+            if ( $add_nofollow && ! $suppress_nofollow ) {
                 $rel_tokens[] = 'nofollow';
             }
 
