@@ -23,6 +23,13 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class ELM_Pro {
 
+    /**
+     * Theme version this integration was verified against.
+     *
+     * The Membership service is a private theme API; see README.
+     */
+    public const TESTED_THEME_VERSION = '1.6.0';
+
     /** Transient holding the cached PRO user list. */
     private const CACHE_KEY = 'elm_pro_users';
 
@@ -78,6 +85,13 @@ final class ELM_Pro {
     private static string $error_text = '';
 
     /**
+     * Container identifier used in the last lookup.
+     *
+     * @var string
+     */
+    private static string $container_id = '';
+
+    /**
      * Membership service from the theme container, if available.
      *
      * @var object|null
@@ -115,6 +129,7 @@ final class ELM_Pro {
         self::$membership_source = 'missing';
         self::$missing_reason    = '';
         self::$error_text        = '';
+        self::$container_id      = '';
     }
 
     /**
@@ -129,6 +144,50 @@ final class ELM_Pro {
         self::$theme_active  = function_exists( 'get_template' ) && 'wpcommunity' === get_template();
 
         return self::$theme_active;
+    }
+
+    /**
+     * Version of the parent theme (get_template() is the parent slug).
+     *
+     * @return string Empty when WordPress cannot report it.
+     */
+    public static function theme_version(): string {
+        if ( ! self::is_theme_active() || ! function_exists( 'wp_get_theme' ) ) {
+            return '';
+        }
+
+        try {
+            $theme = wp_get_theme( get_template() );
+
+            return is_object( $theme ) && method_exists( $theme, 'get' ) ? (string) $theme->get( 'Version' ) : '';
+        } catch ( \Throwable $error ) {
+            return '';
+        }
+    }
+
+    /**
+     * Whether the theme version differs from the one this integration was tested with.
+     */
+    public static function theme_version_mismatch(): bool {
+        $version = self::theme_version();
+
+        return '' !== $version && $version !== self::TESTED_THEME_VERSION;
+    }
+
+    /**
+     * User-facing warning for an untested theme version.
+     */
+    public static function theme_version_note(): string {
+        if ( ! self::theme_version_mismatch() ) {
+            return '';
+        }
+
+        return sprintf(
+            /* translators: 1: detected theme version, 2: tested theme version. */
+            __( 'Тема WPCommunity %1$s не проверялась с этой версией плагина (проверено с %2$s). Статус PRO может быть недоступен.', 'external-link-manager' ),
+            self::theme_version(),
+            self::TESTED_THEME_VERSION
+        );
     }
 
     /**
@@ -154,12 +213,17 @@ final class ELM_Pro {
         self::$membership_source = 'missing';
         self::$missing_reason    = '';
         self::$error_text        = '';
+        self::$container_id      = '';
 
         if ( ! self::is_theme_active() ) {
             return null;
         }
 
         $class = '\WPShop\WPCommunity\Membership';
+        // The theme's ServiceLocator matches identifiers exactly as registered:
+        // Membership::class has no leading backslash. get() with the slashed
+        // name throws UnknownIdentifierException, so the unslashed ID goes first.
+        $id = ltrim( $class, '\\' );
 
         if ( ! class_exists( $class ) ) {
             self::$missing_reason = 'class';
@@ -188,12 +252,59 @@ final class ELM_Pro {
                 return null;
             }
 
-            $membership = $container->get( $class );
-            if ( is_object( $membership ) && $membership instanceof $class ) {
-                self::$membership        = $membership;
-                self::$membership_source = 'membership';
+            $candidates   = [ $id, $class ];
+            $last_error   = null;
+            $wrong_object = false;
+
+            foreach ( $candidates as $candidate ) {
+                self::$container_id = $candidate;
+
+                if ( method_exists( $container, 'has' ) ) {
+                    if ( ! $container->has( $candidate ) ) {
+                        continue;
+                    }
+
+                    try {
+                        $membership = $container->get( $candidate );
+                    } catch ( \Throwable $error ) {
+                        self::$membership_source = 'error';
+                        self::$error_text        = $error->getMessage();
+                        return null;
+                    }
+                } else {
+                    try {
+                        $membership = $container->get( $candidate );
+                    } catch ( \Throwable $error ) {
+                        $last_error = $error;
+                        continue;
+                    }
+                }
+
+                if ( is_object( $membership ) && $membership instanceof $class ) {
+                    self::$membership        = $membership;
+                    self::$membership_source = self::theme_version_mismatch() ? 'theme_version' : 'membership';
+                    return $membership;
+                }
+
+                $wrong_object = true;
+            }
+
+            if ( null !== $last_error ) {
+                if ( self::is_unknown_identifier( $last_error ) ) {
+                    self::$membership_source = 'container_id';
+                } else {
+                    self::$membership_source = 'error';
+                    self::$error_text        = $last_error->getMessage();
+                }
+            } elseif ( $wrong_object ) {
+                self::$membership_source = 'missing';
+                self::$missing_reason    = 'object';
             } else {
-                self::$missing_reason = 'object';
+                self::$membership_source = 'container_id';
+            }
+
+            if ( '' === self::$missing_reason ) {
+                self::$missing_reason = 'container_id';
             }
         } catch ( \Throwable $error ) {
             self::$membership        = null;
@@ -202,6 +313,26 @@ final class ELM_Pro {
         }
 
         return self::$membership;
+    }
+
+    /**
+     * Whether an exception means "this identifier is not in the container".
+     *
+     * Matches the theme's UnknownIdentifierException without requiring the
+     * theme's exception class to be loaded.
+     *
+     * @param \Throwable $error Exception from the container.
+     */
+    private static function is_unknown_identifier( \Throwable $error ): bool {
+        return false !== strpos( $error->getMessage(), ' is not defined.' )
+            || false !== strpos( get_class( $error ), 'UnknownIdentifierException' );
+    }
+
+    /**
+     * Diagnostics: container identifier used in the last lookup.
+     */
+    public static function last_container_id(): string {
+        return self::$container_id;
     }
 
     /**
@@ -239,6 +370,12 @@ final class ELM_Pro {
                 return __( 'Функция WPShop\\WPCommunity\\theme_container() не найдена. Тема загружена не полностью или это не WPCommunity.', 'external-link-manager' );
             case 'container':
                 return __( 'Контейнер темы WPCommunity недоступен: theme_container() не вернул объект с методом get().', 'external-link-manager' );
+            case 'container_id':
+                return sprintf(
+                    /* translators: %s: container identifier that was not found. */
+                    __( 'Контейнер темы не знает идентификатор %s: тема зарегистрировала Membership под другим именем.', 'external-link-manager' ),
+                    '' !== self::$container_id ? self::$container_id : __( '(пусто)', 'external-link-manager' )
+                );
             case 'object':
                 return __( 'Контейнер темы вернул не Membership, а другой объект. Проверьте версию темы WPCommunity.', 'external-link-manager' );
             default:
@@ -277,8 +414,10 @@ final class ELM_Pro {
 
         if ( null !== $membership ) {
             try {
-                $is     = (bool) $membership->is_member( $user_id );
-                $source = 'membership';
+                $is = (bool) $membership->is_member( $user_id );
+                if ( 'theme_version' !== $source ) {
+                    $source = 'membership';
+                }
             } catch ( \Throwable $error ) {
                 $is                       = false;
                 $source                   = 'error';
@@ -521,6 +660,7 @@ final class ELM_Pro {
         }
 
         $source     = (string) ( $data['source'] ?? self::last_source() );
+        $theme_note = self::theme_version_note();
         $diagnostic = '';
         if ( ! $data['api'] ) {
             $diagnostic = self::diagnostic_message();
@@ -533,6 +673,9 @@ final class ELM_Pro {
         }
         ?>
         <p><?php esc_html_e( 'Пользователи с активной подпиской PRO. Ссылки в их статьях не получают rel="nofollow".', 'external-link-manager' ); ?></p>
+        <?php if ( '' !== $theme_note ) : ?>
+            <p><em><?php echo esc_html( $theme_note ); ?></em></p>
+        <?php endif; ?>
 
         <?php if ( ! $data['api'] ) : ?>
             <p><?php echo esc_html( $diagnostic ); ?></p>
